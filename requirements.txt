@@ -1,0 +1,4 @@
+Flask
+gunicorn  # Production WSGI server, mandatory for Render deployment
+psycopg2-binary # For future PostgreSQL connection
+# ReportLab  # Will be added when we implement IDG-300
