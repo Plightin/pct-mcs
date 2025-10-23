@@ -1,4 +1,7 @@
 Flask
-gunicorn  # Production WSGI server, mandatory for Render deployment
-psycopg2-binary # For future PostgreSQL connection
-# ReportLab  # Will be added when we implement IDG-300
+gunicorn
+psycopg2-binary   # PostgreSQL adapter
+SQLAlchemy        # Database ORM (Object-Relational Mapper) for easy management
+reportlab         # For dynamic PDF generation (IDG-300)
+Pillow            # For handling images (ID Face)
+python-barcode    # For generating the QR code content (IDG-302)
