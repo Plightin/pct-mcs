@@ -5,4 +5,4 @@ SQLAlchemy
 reportlab
 Pillow
 python-barcode
-flask-cors  <--- ADD THIS LINE
+flask-cors  
