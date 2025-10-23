@@ -9,15 +9,18 @@ from reportlab.pdfgen import canvas
 from reportlab.graphics.barcode import qr
 from reportlab.graphics.shapes import Drawing
 from reportlab.graphics import renderPDF
+from reportlab.lib.utils import ImageReader # For handling images in ReportLab
+from reportlab.lib import colors # For defining custom colors
 from flask import Flask, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 from flask_cors import CORS 
 from functools import wraps
 from sqlalchemy import func
 from sqlalchemy import or_ 
+from sqlalchemy.exc import OperationalError # Import to catch connection issues
 
 # Import Database Logic
-from db import Session, CampaignMember, AdminUser
+from db import Session, CampaignMember, AdminUser, create_db_tables
 
 # --- 1. APPLICATION SETUP & CONFIGURATION ---
 app = Flask(__name__)
@@ -65,17 +68,29 @@ def role_required(required_roles):
 
 @app.route('/')
 def home():
-    """Confirms the web service is running."""
+    """Confirms the web service is running and checks DB connectivity."""
     session = Session()
-    member_count = session.query(CampaignMember).count()
-    session.close()
+    try:
+        # Perform a quick query to test database connectivity
+        member_count = session.query(CampaignMember).count()
+        
+        return jsonify({
+            "status": "online",
+            "system": "Presidential Campaign Team System (PCT-MCS)",
+            "message": "API and Database connection are active.",
+            "active_members_in_db": member_count
+        })
     
-    return jsonify({
-        "status": "online",
-        "system": "Presidential Campaign Team System (PCT-MCS)",
-        "message": "API is active.",
-        "active_members_in_db": member_count
-    })
+    except OperationalError as e:
+        print(f"FATAL DB ERROR: {e}")
+        return jsonify({
+            "status": "offline/db-error",
+            "message": "Database Operational Error: Cannot connect or tables not created.",
+            "troubleshoot": "Ensure DATABASE_URL is correct and run the database initialization script."
+        }), 500
+    
+    finally:
+        session.close()
 
 # --- Admin Login Endpoint (SEC-400) ---
 @app.route('/admin/login', methods=['POST'])
@@ -83,17 +98,28 @@ def admin_login():
     """Authenticates admin and returns their username as a token."""
     data = request.json
     session = Session()
-    user = session.query(AdminUser).filter_by(username=data.get('username')).first()
-    session.close()
-
-    if user and user.check_password(data.get('password')):
+    try:
+        user = session.query(AdminUser).filter_by(username=data.get('username')).first()
+        
+        if user and user.check_password(data.get('password')):
+            return jsonify({
+                "message": "Login successful. Use your username as the Bearer Token.",
+                "role": user.role,
+                "token_for_testing": user.username # For testing admin routes
+            }), 200
+        
+        # FIX: Ensure all failure cases return JSON, not the default HTML error page
+        return jsonify({"error": "Invalid credentials. Authentication Failed."}), 401
+    
+    except OperationalError as e:
+        print(f"Login DB Operational Error: {e}")
         return jsonify({
-            "message": "Login successful. Use your username as the Bearer Token.",
-            "role": user.role,
-            "token_for_testing": user.username # For testing admin routes
-        }), 200
-    # FIX: Ensure all failure cases return JSON, not the default HTML error page
-    return jsonify({"error": "Invalid credentials. Authentication Failed."}), 401
+            "error": "Database error during login. Check server logs.",
+        }), 500
+    
+    finally:
+        session.close()
+
 
 # --- FEATURE MM-100 & MM-101: SECURE MEMBER REGISTRATION ---
 @app.route('/members/register', methods=['POST'])
@@ -147,6 +173,11 @@ def register_member(admin_user):
             "user_id": unique_id
         }), 201
 
+    except OperationalError as e:
+        session.rollback()
+        print(f"Registration DB Operational Error: {e}")
+        return jsonify({"error": "Database is unavailable. Cannot register member."}, 500)
+
     except Exception as e:
         session.rollback()
         print(f"Registration Error: {e}")
@@ -160,42 +191,53 @@ def register_member(admin_user):
 def member_search(admin_user):
     """Searches and filters member records based on query parameters."""
     session = Session()
-    query = session.query(CampaignMember)
+    try:
+        query = session.query(CampaignMember)
+        
+        # 1. Apply Dynamic Filters
+        if request.args.get('province'):
+            query = query.filter(CampaignMember.province == request.args['province'])
+        if request.args.get('status'):
+            query = query.filter(CampaignMember.status == request.args['status'])
+
+        # Search against multiple fields for partial matches
+        search_term = request.args.get('q')
+        if search_term:
+            search_like = f"%{search_term}%"
+            query = query.filter(or_(
+                CampaignMember.name.ilike(search_like),
+                CampaignMember.nrc.ilike(search_like),
+                CampaignMember.town.ilike(search_like)
+            ))
+
+        # 2. Execute Query and Format Results
+        members = query.limit(100).all()
+        
+        results = [{
+            "user_id": m.user_id,
+            "name": m.name,
+            "nrc": m.nrc,
+            "province": m.province,
+            "status": m.status,
+            "membership_end": m.membership_end.isoformat()
+        } for m in members]
+
+        return jsonify({
+            "admin_role": admin_user.role,
+            "total_results": len(results),
+            "members": results
+        })
+
+    except OperationalError as e:
+        print(f"Search DB Operational Error: {e}")
+        return jsonify({"error": "Database is unavailable. Cannot perform search."}, 500)
     
-    # 1. Apply Dynamic Filters
-    if request.args.get('province'):
-        query = query.filter(CampaignMember.province == request.args['province'])
-    if request.args.get('status'):
-        query = query.filter(CampaignMember.status == request.args['status'])
-
-    # Search against multiple fields for partial matches
-    search_term = request.args.get('q')
-    if search_term:
-        search_like = f"%{search_term}%"
-        query = query.filter(or_(
-            CampaignMember.name.ilike(search_like),
-            CampaignMember.nrc.ilike(search_like),
-            CampaignMember.town.ilike(search_like)
-        ))
-
-    # 2. Execute Query and Format Results
-    members = query.limit(100).all()
-    session.close()
+    except Exception as e:
+        print(f"Search Error: {e}")
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}, 500)
     
-    results = [{
-        "user_id": m.user_id,
-        "name": m.name,
-        "nrc": m.nrc,
-        "province": m.province,
-        "status": m.status,
-        "membership_end": m.membership_end.isoformat()
-    } for m in members]
-
-    return jsonify({
-        "admin_role": admin_user.role,
-        "total_results": len(results),
-        "members": results
-    })
+    finally:
+        session.close()
 
 # --- FEATURE GM-202: BULK DATA REPORTING (Grouped) (SEC-400) ---
 @app.route('/admin/reports/region', methods=['GET'])
@@ -203,148 +245,257 @@ def member_search(admin_user):
 def region_report(admin_user):
     """Generates a summary of member counts grouped by Province and Status."""
     session = Session()
-    
-    report_data = session.query(
-        CampaignMember.province,
-        CampaignMember.status,
-        func.count(CampaignMember.id).label('member_count')
-    ).group_by(
-        CampaignMember.province,
-        CampaignMember.status
-    ).order_by(
-        CampaignMember.province,
-        CampaignMember.status
-    ).all()
-    
-    session.close()
-
-    results = {}
-    for province, status, count in report_data:
-        if province not in results:
-            results[province] = {'Total': 0}
+    try:
+        report_data = session.query(
+            CampaignMember.province,
+            CampaignMember.status,
+            func.count(CampaignMember.id).label('member_count')
+        ).group_by(
+            CampaignMember.province,
+            CampaignMember.status
+        ).order_by(
+            CampaignMember.province,
+            CampaignMember.status
+        ).all()
         
-        results[province][status] = count
-        results[province]['Total'] += count
+        results = {}
+        for province, status, count in report_data:
+            if province not in results:
+                results[province] = {'Total': 0}
+            
+            results[province][status] = count
+            results[province]['Total'] += count
 
-    return jsonify({
-        "admin_role": admin_user.role,
-        "report_type": "Regional Member Status Summary (GM-202)",
-        "summary": results
-    })
+        return jsonify({
+            "admin_role": admin_user.role,
+            "report_type": "Regional Member Status Summary (GM-202)",
+            "summary": results
+        })
+
+    except OperationalError as e:
+        print(f"Report DB Operational Error: {e}")
+        return jsonify({"error": "Database is unavailable. Cannot generate report."}, 500)
+    
+    except Exception as e:
+        print(f"Report Error: {e}")
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}, 500)
+    
+    finally:
+        session.close()
 
 # --- FEATURE IDG-300: DIGITAL ID CARD GENERATION ---
 @app.route('/members/<string:user_id>/card', methods=['GET'])
 def generate_member_card(user_id):
-    """Generates the secure PDF Membership Card (PCT-MC)."""
+    """Generates the secure PDF Membership Card (PCT-MC) with enhanced design."""
     session = Session()
-    member = session.query(CampaignMember).filter_by(user_id=user_id).first()
-    session.close()
+    try:
+        member = session.query(CampaignMember).filter_by(user_id=user_id).first()
 
-    if not member:
-        return jsonify({"error": "Member not found."}, 404)
-        
-    if member.status != 'Active':
-        return jsonify({"error": f"Card generation failed: Member status is {member.status}. Access Denied."}, 403)
-
-    # Use BytesIO to create the PDF in memory (IDG-300)
-    buffer = BytesIO()
-    p = canvas.Canvas(buffer, pagesize=letter)
-    width, height = letter
-    
-    # Card Design Parameters (IDG-301)
-    CARD_WIDTH = 320
-    CARD_HEIGHT = 210
-    X_START = 50
-    Y_START = height - CARD_HEIGHT - 50 
-    PHOTO_SIZE = 90
-    QR_SIZE = 60
-
-    # 1. Border and Header
-    p.setStrokeColorRGB(0.1, 0.1, 0.4) 
-    p.setLineWidth(2)
-    p.rect(X_START, Y_START, CARD_WIDTH, CARD_HEIGHT, stroke=1, fill=0)
-
-    p.setFont("Helvetica-Bold", 16)
-    p.setFillColorRGB(0.4, 0.0, 0.0) 
-    p.drawCentredString(X_START + CARD_WIDTH / 2, Y_START + CARD_HEIGHT - 25, "PRESIDENTIAL CAMPAIGN TEAM")
-    p.setFont("Helvetica", 10)
-    p.drawCentredString(X_START + CARD_WIDTH / 2, Y_START + CARD_HEIGHT - 40, "OFFICIAL MEMBERSHIP CARD (PCT-MC)")
-
-    # 2. Draw Official Photo ID (ID Face)
-    photo_path = os.path.join(UPLOAD_DIR, member.photo_filename)
-    # FIX: Robust check for file existence before attempting to draw (prevents 500 HTML error)
-    if os.path.exists(photo_path):
-        try:
-            p.drawImage(photo_path, X_START + 10, Y_START + 105, PHOTO_SIZE, PHOTO_SIZE, preserveAspectRatio=True)
-        except Exception:
-            p.drawString(X_START + 10, Y_START + 145, "[Error Loading Photo]")
+        if not member:
+            return jsonify({"error": "Member not found."}, 404)
             
-    else:
-        # Fallback if image file is missing (SEC-402)
-        p.drawString(X_START + 10, Y_START + 145, "[Photo Placeholder]")
+        if member.status != 'Active':
+            return jsonify({"error": f"Card generation failed: Member status is {member.status}. Access Denied."}, 403)
 
-    # 3. Draw Member Details
-    p.setFillColorRGB(0, 0, 0)
-    p.setFont("Helvetica-Bold", 11)
-    p.drawString(X_START + PHOTO_SIZE + 20, Y_START + 160, f"NAME: {member.name.upper()}")
-    p.drawString(X_START + PHOTO_SIZE + 20, Y_START + 145, f"NRC: {member.nrc}")
-    p.drawString(X_START + PHOTO_SIZE + 20, Y_START + 130, f"ID: {member.user_id}")
-    
-    # Geographic Data (GM-201)
-    p.setFont("Helvetica", 10)
-    p.drawString(X_START + PHOTO_SIZE + 20, Y_START + 105, f"Province: {member.province}")
-    p.drawString(X_START + PHOTO_SIZE + 20, Y_START + 90, f"Region/Town: {member.zone} / {member.town}")
-    
-    # 4. Draw Membership Period (IDG-303)
-    p.setFont("Helvetica-BoldOblique", 11)
-    p.setFillColorRGB(0.5, 0.1, 0.1)
-    p.drawString(X_START + 10, Y_START + 70, f"VALID UNTIL: {member.membership_end.strftime('%Y-%m-%d')}")
-    
-    # 5. Draw QR Code (IDG-302)
-    qr_data = f"PCT-VERIFY:{member.user_id}|STATUS:{member.status}" 
-    qrw = qr.QrCodeWidget(qr_data)
-    
-    d = Drawing(QR_SIZE, QR_SIZE, transform=[QR_SIZE / (qrw.getBounds()[2]-qrw.getBounds()[0]), 0, 0, QR_SIZE / (qrw.getBounds()[3]-qrw.getBounds()[1]), 0, 0])
-    d.add(qrw)
-    renderPDF.draw(d, p, X_START + 10, Y_START + 10) # Position bottom-left
-    
-    p.setFont("Helvetica", 8)
-    p.setFillColorRGB(0, 0, 0)
-    p.drawString(X_START + QR_SIZE + 20, Y_START + 30, "Scan to verify status (SEC-401)")
+        # Use BytesIO to create the PDF in memory (IDG-300)
+        buffer = BytesIO()
+        p = canvas.Canvas(buffer, pagesize=letter)
+        width, height = letter
+        
+        # --- Card Design Parameters (Enhanced IDG-301) ---
+        CARD_WIDTH = 350
+        CARD_HEIGHT = 220
+        X_OFFSET = 50 # Starting X position for the card
+        Y_OFFSET = height - CARD_HEIGHT - 50 # Starting Y position for the card (top-down)
 
-    # Finalize and Return PDF
-    p.showPage()
-    p.save()
+        PHOTO_BOX_SIZE = 90
+        PHOTO_X = X_OFFSET + 15
+        PHOTO_Y = Y_OFFSET + CARD_HEIGHT - PHOTO_BOX_SIZE - 20 # Position from card top
+        
+        QR_CODE_SIZE = 60
+        QR_X = X_OFFSET + 15
+        QR_Y = Y_OFFSET + 15 # Position from card bottom
+
+        # --- Define Colors ---
+        COLOR_PRIMARY_RED = colors.Color(0.85, 0.27, 0.2) # A strong red
+        COLOR_DARK_BLUE = colors.Color(0.1, 0.1, 0.4)
+        COLOR_ACCENT_YELLOW = colors.Color(0.95, 0.75, 0.0)
+        COLOR_TEXT_LIGHT = colors.white
+        COLOR_TEXT_DARK = colors.black
+
+        # --- 1. Draw Card Background and Border ---
+        # Draw a rounded rectangle for the card shape
+        p.setFillColor(colors.white)
+        p.setStrokeColor(COLOR_DARK_BLUE)
+        p.setLineWidth(1.5)
+        p.roundRect(X_OFFSET, Y_OFFSET, CARD_WIDTH, CARD_HEIGHT, 10, stroke=1, fill=1) # Rounded corners
+
+        # --- Add a gradient background (simplified as a colored rectangle for now) ---
+        # For true gradients, one would typically use ReportLab's gradient features or prepare an image.
+        # Here, a solid colored background for visual segmentation.
+        p.setFillColor(COLOR_PRIMARY_RED)
+        p.rect(X_OFFSET + 2, Y_OFFSET + 2, CARD_WIDTH - 4, CARD_HEIGHT - 4, stroke=0, fill=1) # Inner colored background
+
+        # --- Overlay a subtle background pattern/image (placeholder: a transparent shape) ---
+        # In a real scenario, you'd load a PNG with transparency here:
+        # try:
+        #     bg_pattern = ImageReader('path/to/subtle_pattern.png')
+        #     p.drawImage(bg_pattern, X_OFFSET + 5, Y_OFFSET + 5, CARD_WIDTH - 10, CARD_HEIGHT - 10, mask='auto')
+        # except:
+        #     pass # Fallback if image not found
+
+        # --- 2. Campaign Logo (Top Left) ---
+        try:
+            # Assuming 'logo.png' is in the same directory as pct.py or a known path
+            # For Render deployment, ensure this image is included in your project files.
+            script_dir = os.path.dirname(__file__)
+            logo_path = os.path.join(script_dir, 'logo.png') 
+            if os.path.exists(logo_path):
+                logo = ImageReader(logo_path)
+                p.drawImage(logo, X_OFFSET + CARD_WIDTH - 80, Y_OFFSET + CARD_HEIGHT - 50, 60, 60, preserveAspectRatio=True, mask='auto')
+            else:
+                p.setFillColor(COLOR_TEXT_LIGHT)
+                p.setFont("Helvetica-Bold", 10)
+                p.drawString(X_OFFSET + CARD_WIDTH - 75, Y_OFFSET + CARD_HEIGHT - 35, "PCT Logo")
+        except Exception as e:
+            print(f"Error loading logo: {e}")
+            p.setFillColor(COLOR_TEXT_LIGHT)
+            p.setFont("Helvetica-Bold", 10)
+            p.drawString(X_OFFSET + CARD_WIDTH - 75, Y_OFFSET + CARD_HEIGHT - 35, "PCT Logo")
+
+
+        # --- 3. Header Text ---
+        p.setFont("Helvetica-Bold", 16)
+        p.setFillColor(COLOR_TEXT_LIGHT)
+        p.drawString(X_OFFSET + PHOTO_BOX_SIZE + 30, Y_OFFSET + CARD_HEIGHT - 30, "PRESIDENTIAL CAMPAIGN TEAM")
+        p.setFont("Helvetica", 10)
+        p.drawString(X_OFFSET + PHOTO_BOX_SIZE + 30, Y_OFFSET + CARD_HEIGHT - 45, "OFFICIAL MEMBERSHIP CARD (PCT-MC)")
+
+        # --- 4. Photo Placeholder (Circular Frame) ---
+        p.setFillColor(colors.white)
+        p.setStrokeColor(COLOR_ACCENT_YELLOW) # Frame color
+        p.setLineWidth(2)
+        p.circle(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2, PHOTO_BOX_SIZE/2, stroke=1, fill=1) # Draw white circle with yellow border
+
+        # Draw Official Photo ID (ID Face)
+        photo_path = os.path.join(UPLOAD_DIR, member.photo_filename)
+        if os.path.exists(photo_path):
+            try:
+                # Use a circular clip path for the photo
+                p.saveState()
+                p.setFillColor(colors.white) # Ensure no fill from circle affects clipping
+                p.setStrokeColor(colors.white)
+                p.circle(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2, PHOTO_BOX_SIZE/2, stroke=0, fill=1)
+                p.clipPage()
+                p.drawImage(photo_path, PHOTO_X, PHOTO_Y, PHOTO_BOX_SIZE, PHOTO_BOX_SIZE, preserveAspectRatio=True, mask='auto')
+                p.restoreState() # Restore context after clipping
+            except Exception:
+                p.setFillColor(COLOR_TEXT_DARK)
+                p.setFont("Helvetica", 8)
+                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "Photo Error")
+                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 15, "Placeholder")
+        else:
+            p.setFillColor(COLOR_TEXT_DARK)
+            p.setFont("Helvetica-Bold", 10)
+            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 + 5, "OFFICIAL")
+            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "PHOTO ID")
+
+
+        # --- 5. Member Details ---
+        DETAIL_TEXT_X = X_OFFSET + PHOTO_BOX_SIZE + 30
+        p.setFillColor(COLOR_TEXT_LIGHT)
+        p.setFont("Helvetica-Bold", 11)
+        p.drawString(DETAIL_TEXT_X, Y_OFFSET + CARD_HEIGHT - 75, f"NAME: {member.name.upper()}")
+        p.drawString(DETAIL_TEXT_X, Y_OFFSET + CARD_HEIGHT - 90, f"NRC: {member.nrc}")
+        p.drawString(DETAIL_TEXT_X, Y_OFFSET + CARD_HEIGHT - 105, f"ID: {member.user_id}")
+        
+        # Geographic Data (GM-201)
+        p.setFont("Helvetica", 9)
+        p.drawString(DETAIL_TEXT_X, Y_OFFSET + CARD_HEIGHT - 125, f"Province: {member.province}")
+        p.drawString(DETAIL_TEXT_X, Y_OFFSET + CARD_HEIGHT - 140, f"Town: {member.town}")
+        p.drawString(DETAIL_TEXT_X, Y_OFFSET + CARD_HEIGHT - 155, f"Zone: {member.zone}")
+
+        # --- 6. Membership Period (IDG-303) - Stylized Band ---
+        BAND_HEIGHT = 25
+        p.setFillColor(COLOR_ACCENT_YELLOW)
+        p.rect(X_OFFSET + PHOTO_BOX_SIZE + 20, Y_OFFSET + CARD_HEIGHT - 175, CARD_WIDTH - PHOTO_BOX_SIZE - 40, BAND_HEIGHT, stroke=0, fill=1) # Yellow band
+
+        p.setFont("Helvetica-BoldOblique", 12)
+        p.setFillColor(COLOR_DARK_BLUE)
+        p.drawCentredString(X_OFFSET + PHOTO_BOX_SIZE + 20 + (CARD_WIDTH - PHOTO_BOX_SIZE - 40)/2, Y_OFFSET + CARD_HEIGHT - 175 + 8, 
+                           f"VALID UNTIL: {member.membership_end.strftime('%Y-%m-%d')}")
+        
+        # --- 7. QR Code (IDG-302) ---
+        qr_data = f"PCT-VERIFY:{member.user_id}|STATUS:{member.status}|EXPIRY:{member.membership_end.strftime('%Y-%m-%d')}" 
+        qrw = qr.QrCodeWidget(qr_data)
+        
+        # Adjust QR code bounds for rendering
+        bounds = qrw.getBounds()
+        x1, y1, x2, y2 = bounds
+        qr_drawing = Drawing(QR_CODE_SIZE, QR_CODE_SIZE, transform=[QR_CODE_SIZE/(x2-x1),0,0,QR_CODE_SIZE/(y2-y1),-x1*QR_CODE_SIZE/(x2-x1),-y1*QR_CODE_SIZE/(y2-y1)])
+        qr_drawing.add(qrw)
+        renderPDF.draw(qr_drawing, p, QR_X, QR_Y) # Position bottom-left
+        
+        p.setFont("Helvetica", 8)
+        p.setFillColor(COLOR_TEXT_LIGHT)
+        p.drawString(QR_X + QR_CODE_SIZE + 5, QR_Y + 25, "Scan to verify status (SEC-401)")
+        p.drawString(QR_X + QR_CODE_SIZE + 5, QR_Y + 15, "ID: " + member.user_id) # Repeat ID for quick lookup
+
+        # Finalize and Return PDF
+        p.showPage()
+        p.save()
+        
+        buffer.seek(0)
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f"PCT_ID_Card_{member.user_id}.pdf",
+            mimetype='application/pdf'
+        )
+
+    except OperationalError as e:
+        print(f"PDF Generation DB Operational Error: {e}")
+        return jsonify({"error": "Database is unavailable. Cannot generate PDF."}, 500)
+
+    except Exception as e:
+        print(f"PDF Generation Error: {e}")
+        return jsonify({"error": f"Internal Server Error during PDF generation: {str(e)}"}, 500)
     
-    buffer.seek(0)
-    return send_file(
-        buffer,
-        as_attachment=True,
-        download_name=f"PCT_ID_Card_{member.user_id}.pdf",
-        mimetype='application/pdf'
-    )
+    finally:
+        session.close()
 
 # --- FEATURE SEC-401: REAL-TIME VERIFICATION PORTAL ENDPOINT ---
 @app.route('/verify/<string:user_id>', methods=['GET'])
 def verify_member(user_id):
     """Provides public verification data for QR code scanning (SEC-401)."""
     session = Session()
-    member = session.query(CampaignMember).filter_by(user_id=user_id).first()
-    session.close()
+    try:
+        member = session.query(CampaignMember).filter_by(user_id=user_id).first()
 
-    if not member:
-        return jsonify({"error": "ID not found in system."}, 404)
+        if not member:
+            return jsonify({"error": "ID not found in system."}, 404)
+        
+        # Check expiry status
+        is_active = member.status == 'Active' and member.membership_end >= date.today()
+        
+        return jsonify({
+            "User_ID": member.user_id,
+            "Name": member.name,
+            "Status": member.status,
+            "Valid_Until": member.membership_end.isoformat(),
+            "Verification_Result": "AUTHENTICATED" if is_active else "EXPIRED/INACTIVE"
+        })
+
+    except OperationalError as e:
+        print(f"Verification DB Operational Error: {e}")
+        return jsonify({"error": "Database is unavailable. Cannot verify ID."}, 500)
     
-    # Check expiry status
-    is_active = member.status == 'Active' and member.membership_end >= date.today()
+    except Exception as e:
+        print(f"Verification Error: {e}")
+        return jsonify({"error": f"Internal Server Error during verification: {str(e)}"}, 500)
     
-    return jsonify({
-        "User_ID": member.user_id,
-        "Name": member.name,
-        "Status": member.status,
-        "Valid_Until": member.membership_end.isoformat(),
-        "Verification_Result": "AUTHENTICATED" if is_active else "EXPIRED/INACTIVE"
-    })
+    finally:
+        session.close()
 
 
 # --- EXECUTION BLOCK ---
