@@ -1,7 +1,8 @@
 Flask
 gunicorn
-psycopg2-binary   # PostgreSQL adapter
-SQLAlchemy        # Database ORM (Object-Relational Mapper) for easy management
-reportlab         # For dynamic PDF generation (IDG-300)
-Pillow            # For handling images (ID Face)
-python-barcode    # For generating the QR code content (IDG-302)
+psycopg2-binary
+SQLAlchemy
+reportlab
+Pillow
+python-barcode
+flask-cors  <--- ADD THIS LINE
