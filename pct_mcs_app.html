@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCT-MCS: Campaign Team Management</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Font: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- QR Code Scanner Library (html5-qrcode) -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
+        .nav-link { cursor: pointer; transition: all 0.2s; }
+        .nav-link.active { border-bottom: 2px solid #D94432; font-weight: 600; color: #D94432; }
+        .card { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06); }
+        .btn-primary { background-color: #D94432; transition: background-color 0.2s; }
+        .btn-primary:hover { background-color: #a83528; }
+        .form-input { border-radius: 0.5rem; border: 1px solid #ccc; padding: 0.75rem; transition: border-color 0.2s; }
+        .form-input:focus { border-color: #D94432; outline: none; }
+        /* Style the hidden file input button */
+        .file-upload-label {
+            cursor: pointer;
+            padding: 8px 12px;
+            background-color: #2563EB;
+            color: white;
+            border-radius: 0.5rem;
+            display: inline-block;
+            transition: background-color 0.2s;
+        }
+        .file-upload-label:hover {
+            background-color: #1E40AF;
+        }
+    </style>
+</head>
+
+<body class="min-h-screen">
+    <div id="app" class="flex flex-col min-h-screen">
+
+        <!-- Header and Navigation -->
+        <header class="bg-white shadow-md sticky top-0 z-10">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-gray-800">PCT-MCS <span class="hidden sm:inline text-sm text-gray-500">(Campaign Team Manager)</span></h1>
+                </div>
+                <nav id="main-nav" class="flex space-x-6">
+                    <!-- Navigation links -->
+                </nav>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main id="content-container" class="flex-grow p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
+            <!-- Content will be dynamically inserted here -->
+        </main>
+
+        <!-- Modals and Alerts Container -->
+        <div id="modal-container"></div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE_URL = 'https://pct-mcs-api.onrender.com'; // **REPLACE WITH YOUR ACTUAL RENDER URL**
+        const APP_STATE = {
+            currentView: 'login',
+            isAuthenticated: false,
+            user: null,
+            token: null, // The username is used as a token in this demo (SEC-400)
+            roles: ['SuperAdmin', 'ProvincialAdmin', 'DataEntry'],
+            provinces: ["Copperbelt", "Lusaka", "Southern", "Eastern", "Northern", "Western", "Muchinga", "Luapula", "North-Western", "Central"]
+        };
+        const NAV_LINKS = [
+            { id: 'dashboard', label: 'Dashboard', role: 'DataEntry' },
+            { id: 'register', label: 'Register Member', role: 'DataEntry' },
+            { id: 'report', label: 'Reports', role: 'ProvincialAdmin' },
+            { id: 'verify', label: 'ID Verification', role: 'Public' }
+        ];
+
+        // --- UTILITIES ---
+        function showMessage(message, type = 'success') {
+            const container = document.getElementById('modal-container');
+            const alertDiv = document.createElement('div');
+            let bgColor = type === 'error' ? 'bg-red-500' : 'bg-green-500';
+            let icon = type === 'error' ? '❌' : '✅';
+
+            alertDiv.className = `fixed bottom-4 right-4 p-4 rounded-lg text-white shadow-xl ${bgColor} z-50 transition-opacity duration-300`;
+            alertDiv.innerHTML = `<div class="flex items-center">${icon}<span class="ml-2 font-semibold">${message}</span></div>`;
+            container.appendChild(alertDiv);
+            
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                alertDiv.style.opacity = '0';
+                setTimeout(() => alertDiv.remove(), 300);
+            }, 5000);
+        }
+
+        function createAuthHeaders() {
+            if (APP_STATE.token) {
+                return { 'Authorization': `Bearer ${APP_STATE.token}` };
+            }
+            return {};
+        }
+
+        // --- NAVIGATION & ROUTING ---
+        function updateNavigation() {
+            const navContainer = document.getElementById('main-nav');
+            navContainer.innerHTML = '';
+
+            // Handle Login/Logout button
+            const loginLogoutBtn = document.createElement('span');
+            loginLogoutBtn.className = 'nav-link text-gray-700 hover:text-red-600 px-3 py-2 rounded-md';
+            loginLogoutBtn.textContent = APP_STATE.isAuthenticated ? 'Logout' : 'Login';
+            loginLogoutBtn.onclick = APP_STATE.isAuthenticated ? logout : () => navigate('login');
+            navContainer.appendChild(loginLogoutBtn);
+
+            if (!APP_STATE.isAuthenticated) return;
+
+            // Render main nav links based on user role (SEC-400)
+            NAV_LINKS.forEach(link => {
+                const requiredRole = link.role;
+                let canAccess = false;
+
+                if (requiredRole === 'Public') {
+                    canAccess = true;
+                } else if (APP_STATE.user && APP_STATE.user.role) {
+                    // Simplified role hierarchy check
+                    if (requiredRole === 'DataEntry' && ['DataEntry', 'ProvincialAdmin', 'SuperAdmin'].includes(APP_STATE.user.role)) {
+                        canAccess = true;
+                    } else if (requiredRole === 'ProvincialAdmin' && ['ProvincialAdmin', 'SuperAdmin'].includes(APP_STATE.user.role)) {
+                        canAccess = true;
+                    } else if (requiredRole === 'SuperAdmin' && APP_STATE.user.role === 'SuperAdmin') {
+                        canAccess = true;
+                    }
+                }
+
+                if (canAccess) {
+                    const linkElement = document.createElement('span');
+                    linkElement.className = `nav-link text-gray-700 hover:text-red-600 px-3 py-2 rounded-md ${APP_STATE.currentView === link.id ? 'active' : ''}`;
+                    linkElement.textContent = link.label;
+                    linkElement.onclick = () => navigate(link.id);
+                    navContainer.appendChild(linkElement);
+                }
+            });
+        }
+
+        function navigate(viewId) {
+            APP_STATE.currentView = viewId;
+            updateNavigation();
+            renderView(viewId);
+        }
+
+        function renderView(viewId) {
+            const container = document.getElementById('content-container');
+            container.innerHTML = '';
+            
+            if (!APP_STATE.isAuthenticated && viewId !== 'login' && viewId !== 'verify') {
+                showMessage("Access denied. Please log in.", 'error');
+                return navigate('login');
+            }
+
+            switch (viewId) {
+                case 'login': return renderLogin();
+                case 'dashboard': return renderDashboard();
+                case 'register': return renderRegistrationForm();
+                case 'report': return renderReports();
+                case 'verify': return renderVerificationScanner();
+                default: return renderDashboard();
+            }
+        }
+
+        // --- VIEW RENDERERS ---
+
+        function renderLogin() {
+            document.getElementById('content-container').innerHTML = `
+                <div class="max-w-md mx-auto mt-10 card bg-white p-8 rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-center text-gray-800 mb-6">Admin Login</h2>
+                    <form id="login-form">
+                        <div class="mb-4">
+                            <label for="username" class="block text-gray-700 text-sm font-bold mb-2">Username (Token):</label>
+                            <input type="text" id="username" name="username" class="form-input w-full" placeholder="superadmin" required>
+                        </div>
+                        <div class="mb-6">
+                            <label for="password" class="block text-gray-700 text-sm font-bold mb-2">Password:</label>
+                            <input type="password" id="password" name="password" class="form-input w-full" placeholder="Enter secure password" required>
+                        </div>
+                        <button type="submit" class="btn-primary w-full text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline">
+                            Log In
+                        </button>
+                        <p class="text-xs text-gray-500 mt-4 text-center">Use 'superadmin' and 'PCT_InitialSecure2025' to initialize the system.</p>
+                    </form>
+                </div>
+            `;
+            document.getElementById('login-form').addEventListener('submit', handleLogin);
+        }
+
+        function renderDashboard() {
+            document.getElementById('content-container').innerHTML = `
+                <div class="card bg-white p-6 rounded-xl">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-4">Admin Dashboard</h2>
+                    <p class="text-gray-600 mb-6">Welcome, ${APP_STATE.user.username} (${APP_STATE.user.role}).</p>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6" id="dashboard-stats">
+                        <div class="bg-red-100 p-4 rounded-xl border border-red-200">
+                            <p class="text-sm text-red-600">Total Members</p>
+                            <p class="text-2xl font-bold text-red-800" id="stat-total">...</p>
+                        </div>
+                        <div class="bg-blue-100 p-4 rounded-xl border border-blue-200">
+                            <p class="text-sm text-blue-600">Active Members</p>
+                            <p class="text-2xl font-bold text-blue-800" id="stat-active">...</p>
+                        </div>
+                        <div class="bg-yellow-100 p-4 rounded-xl border border-yellow-200">
+                            <p class="text-sm text-yellow-600">Expired/Pending</p>
+                            <p class="text-2xl font-bold text-yellow-800" id="stat-inactive">...</p>
+                        </div>
+                    </div>
+
+                    <h3 class="text-2xl font-bold text-gray-800 mt-8 mb-4">Member Search (MM-104)</h3>
+                    <form id="search-form" class="flex flex-col sm:flex-row gap-4 mb-6">
+                        <input type="text" id="search-query" name="q" placeholder="Name, NRC, or Town" class="form-input flex-grow">
+                        <select id="search-province" name="province" class="form-input">
+                            <option value="">All Provinces</option>
+                            ${APP_STATE.provinces.map(p => `<option value="${p}">${p}</option>`).join('')}
+                        </select>
+                        <select id="search-status" name="status" class="form-input">
+                            <option value="">All Statuses</option>
+                            <option value="Active">Active</option>
+                            <option value="Expired">Expired</option>
+                        </select>
+                        <button type="submit" class="btn-primary text-white py-2 px-4 rounded-lg">Search</button>
+                    </form>
+
+                    <div id="search-results-table" class="overflow-x-auto">
+                        <!-- Table content will be loaded here -->
+                        <p class="text-gray-500">Use the search form to find members.</p>
+                    </div>
+                </div>
+            `;
+            fetchDashboardStats();
+            document.getElementById('search-form').addEventListener('submit', handleMemberSearch);
+        }
+        
+        function renderRegistrationForm() {
+            document.getElementById('content-container').innerHTML = `
+                <div class="max-w-2xl mx-auto card bg-white p-8 rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-6">Member Registration (MM-100)</h2>
+                    <form id="registration-form">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <!-- Left Column -->
+                            <div>
+                                <div class="mb-4">
+                                    <label for="reg-name" class="block text-gray-700 text-sm font-bold mb-2">Full Name *</label>
+                                    <input type="text" id="reg-name" name="name" class="form-input w-full" required>
+                                </div>
+                                <div class="mb-4">
+                                    <label for="reg-nrc" class="block text-gray-700 text-sm font-bold mb-2">NRC Number * (MM-101)</label>
+                                    <input type="text" id="reg-nrc" name="nrc" class="form-input w-full" required>
+                                </div>
+                                <div class="mb-4">
+                                    <label for="reg-end-date" class="block text-gray-700 text-sm font-bold mb-2">Membership End Date * (IDG-303)</label>
+                                    <input type="date" id="reg-end-date" name="membership_end_date" class="form-input w-full" required>
+                                </div>
+                            </div>
+                            
+                            <!-- Right Column (Geographic/Affiliation - GM-201) -->
+                            <div>
+                                <div class="mb-4">
+                                    <label for="reg-province" class="block text-gray-700 text-sm font-bold mb-2">Province *</label>
+                                    <select id="reg-province" name="province" class="form-input w-full" required>
+                                        <option value="">Select Province</option>
+                                        ${APP_STATE.provinces.map(p => `<option value="${p}">${p}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="mb-4">
+                                    <label for="reg-town" class="block text-gray-700 text-sm font-bold mb-2">Town / City</label>
+                                    <input type="text" id="reg-town" name="town" class="form-input w-full">
+                                </div>
+                                <div class="mb-4">
+                                    <label for="reg-zone" class="block text-gray-700 text-sm font-bold mb-2">Zone / Ward</label>
+                                    <input type="text" id="reg-zone" name="zone" class="form-input w-full">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Photo Upload (SEC-404) -->
+                        <div class="mb-6 border-t pt-4 mt-4">
+                            <label class="block text-gray-700 text-sm font-bold mb-2">Official Photo ID * (SEC-404)</label>
+                            <label for="reg-photo" class="file-upload-label">
+                                <span id="file-name-display">Choose Photo (JPG/PNG)</span>
+                            </label>
+                            <input type="file" id="reg-photo" name="id_photo" accept=".jpg,.jpeg,.png" class="hidden" required>
+                        </div>
+                        
+                        <button type="submit" class="btn-primary w-full text-white font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline">
+                            Register & Generate ID Reference
+                        </button>
+                    </form>
+                </div>
+            `;
+            document.getElementById('registration-form').addEventListener('submit', handleRegistration);
+            document.getElementById('reg-photo').addEventListener('change', (e) => {
+                const fileName = e.target.files.length ? e.target.files[0].name : 'Choose Photo (JPG/PNG)';
+                document.getElementById('file-name-display').textContent = fileName;
+            });
+        }
+        
+        function renderReports() {
+            document.getElementById('content-container').innerHTML = `
+                <div class="card bg-white p-6 rounded-xl">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-6">Regional Reports (GM-202)</h2>
+                    <p class="text-gray-600 mb-6">Summary of active and total members grouped by Province.</p>
+                    
+                    <div id="report-summary" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <p class="text-gray-500">Loading reports...</p>
+                    </div>
+                </div>
+            `;
+            fetchRegionalReports();
+        }
+
+        function renderVerificationScanner() {
+            document.getElementById('content-container').innerHTML = `
+                <div class="max-w-md mx-auto card bg-white p-8 rounded-xl shadow-lg">
+                    <h2 class="text-3xl font-bold text-center text-gray-800 mb-6">ID Verification (SEC-401)</h2>
+                    
+                    <!-- Scanner Area -->
+                    <div id="reader" class="w-full h-64 border border-gray-300 rounded-lg overflow-hidden mb-6"></div>
+                    <p class="text-center text-sm text-gray-500 mb-4">Scan the QR code on the PCT-MC.</p>
+
+                    <h3 class="text-xl font-bold text-center mb-3">Manual ID Lookup</h3>
+                    <form id="manual-verify-form" class="flex gap-2">
+                        <input type="text" id="verify-id-input" placeholder="Enter User ID (e.g., PCT-2025-XXXXXX)" class="form-input flex-grow" required>
+                        <button type="submit" class="btn-primary text-white py-2 px-4 rounded-lg">Verify</button>
+                    </form>
+
+                    <!-- Verification Results -->
+                    <div id="verification-result" class="mt-6 p-4 rounded-lg bg-gray-100 hidden">
+                        <p class="font-bold text-lg mb-2" id="result-title"></p>
+                        <p id="result-name" class="text-gray-700"></p>
+                        <p id="result-status" class="font-semibold"></p>
+                        <p id="result-expiry" class="text-sm text-gray-500"></p>
+                    </div>
+                </div>
+            `;
+            
+            startQrScanner();
+            document.getElementById('manual-verify-form').addEventListener('submit', handleManualVerification);
+        }
+
+        // --- AUTHENTICATION HANDLERS ---
+        async function handleLogin(event) {
+            event.preventDefault();
+            const username = event.target.username.value;
+            const password = event.target.password.value;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/admin/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    APP_STATE.isAuthenticated = true;
+                    APP_STATE.token = data.token_for_testing;
+                    APP_STATE.user = { username: username, role: data.role };
+                    showMessage(`Logged in successfully as ${data.role}.`, 'success');
+                    navigate('dashboard');
+                } else {
+                    showMessage(data.error || "Login failed. Check credentials.", 'error');
+                }
+            } catch (error) {
+                console.error("Login API Error:", error);
+                showMessage("Could not connect to the API.", 'error');
+            }
+        }
+
+        function logout() {
+            APP_STATE.isAuthenticated = false;
+            APP_STATE.token = null;
+            APP_STATE.user = null;
+            showMessage("Logged out successfully.", 'success');
+            navigate('login');
+        }
+
+        // --- MM-100/IDG-300 HANDLERS ---
+        async function handleRegistration(event) {
+            event.preventDefault();
+            const form = event.target;
+            const formData = new FormData(form);
+
+            try {
+                // Ensure photo file is included (client-side check)
+                if (!formData.get('id_photo') || formData.get('id_photo').size === 0) {
+                    showMessage("Please select an Official Photo ID.", 'error');
+                    return;
+                }
+                
+                const response = await fetch(`${API_BASE_URL}/members/register`, {
+                    method: 'POST',
+                    headers: createAuthHeaders(), // SEC-400 protection
+                    body: formData // FormData handles multipart/form-data for file upload
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showMessage(`Member registered! ID: ${data.user_id}. Generating card...`, 'success');
+                    
+                    // Automatically trigger PDF download (IDG-300)
+                    window.open(`${API_BASE_URL}/members/${data.user_id}/card`, '_blank');
+                    form.reset(); // Clear form after successful registration
+                } else {
+                    showMessage(data.error || "Registration failed. Check NRC/data integrity.", 'error');
+                }
+            } catch (error) {
+                console.error("Registration API Error:", error);
+                showMessage("Could not connect to the registration API.", 'error');
+            }
+        }
+
+        // --- MM-104 HANDLERS ---
+        async function handleMemberSearch(event) {
+            event.preventDefault();
+            const form = event.target;
+            const params = new URLSearchParams();
+
+            const query = form['q'].value;
+            const province = form['province'].value;
+            const status = form['status'].value;
+
+            if (query) params.append('q', query);
+            if (province) params.append('province', province);
+            if (status) params.append('status', status);
+
+            const resultsContainer = document.getElementById('search-results-table');
+            resultsContainer.innerHTML = '<p class="text-center text-blue-500">Searching...</p>';
+
+            try {
+                const url = `${API_BASE_URL}/admin/members/search?${params.toString()}`;
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: createAuthHeaders()
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    renderSearchResults(data.members);
+                    showMessage(`Found ${data.total_results} members.`, 'success');
+                } else {
+                    renderSearchResults([]);
+                    showMessage(data.error || "Search failed. Check your permissions (SEC-400).", 'error');
+                }
+            } catch (error) {
+                console.error("Search API Error:", error);
+                showMessage("Could not connect to the search API.", 'error');
+            }
+        }
+        
+        function renderSearchResults(members) {
+            const container = document.getElementById('search-results-table');
+            if (members.length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-500 py-4">No members found matching the criteria.</p>';
+                return;
+            }
+
+            let html = `
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NRC</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Province</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+            `;
+
+            members.forEach(m => {
+                const statusClass = m.status === 'Active' ? 'text-green-600 font-semibold' : 'text-red-600';
+                html += `
+                    <tr>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${m.name}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${m.nrc}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${m.province}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm ${statusClass}">${m.status}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button onclick="window.open('${API_BASE_URL}/members/${m.user_id}/card', '_blank')" 
+                                class="text-blue-600 hover:text-blue-900 text-xs font-medium py-1 px-3 rounded-full border border-blue-200 hover:bg-blue-50">
+                                View ID (IDG-300)
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+        }
+
+        // --- GM-202 HANDLERS ---
+        async function fetchRegionalReports() {
+            const container = document.getElementById('report-summary');
+            try {
+                const response = await fetch(`${API_BASE_URL}/admin/reports/region`, {
+                    method: 'GET',
+                    headers: createAuthHeaders() // SEC-400 protection
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    renderRegionalReports(data.summary);
+                } else {
+                    container.innerHTML = `<p class="text-red-600">${data.error || "Failed to load reports. Check permissions."}</p>`;
+                }
+            } catch (error) {
+                console.error("Report API Error:", error);
+                container.innerHTML = '<p class="text-red-600">Could not connect to the reporting API.</p>';
+            }
+        }
+        
+        function renderRegionalReports(summary) {
+            const container = document.getElementById('report-summary');
+            let html = '';
+            
+            for (const province in summary) {
+                const report = summary[province];
+                const active = report.Active || 0;
+                const total = report.Total || 0;
+                const activePercentage = total > 0 ? ((active / total) * 100).toFixed(1) : 0;
+                
+                html += `
+                    <div class="bg-gray-50 p-5 rounded-xl border border-gray-200">
+                        <h4 class="text-xl font-bold text-red-700 mb-2">${province}</h4>
+                        <div class="space-y-1 text-sm">
+                            <p>Total Members: <span class="font-semibold">${total}</span></p>
+                            <p class="text-green-600">Active: <span class="font-semibold">${active} (${activePercentage}%)</span></p>
+                            <p class="text-yellow-600">Inactive/Expired: <span class="font-semibold">${total - active}</span></p>
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = html;
+        }
+
+
+        // --- SEC-401 HANDLERS (Verification) ---
+        let html5QrCode = null;
+        let qrScannerTimeout;
+
+        function startQrScanner() {
+            const qrbox = 250; 
+            const config = { fps: 10, qrbox: { width: qrbox, height: qrbox } };
+            
+            if (html5QrCode) {
+                html5QrCode.stop().catch(console.error); // Stop any running instance
+            }
+            html5QrCode = new Html5Qrcode("reader");
+
+            html5QrCode.start(
+                { facingMode: "environment" },
+                config,
+                (decodedText, decodedResult) => {
+                    // Success callback
+                    processVerificationText(decodedText);
+                    html5QrCode.stop().catch(console.error);
+                },
+                (errorMessage) => {
+                    // Failure callback (e.g., no QR code found)
+                    // console.log("QR Scan Error:", errorMessage);
+                }
+            ).catch((err) => {
+                document.getElementById('reader').innerHTML = '<p class="text-center text-red-500 p-8">Camera failed. Ensure permission is granted or device is supported.</p>';
+            });
+        }
+        
+        async function handleManualVerification(event) {
+            event.preventDefault();
+            const userId = document.getElementById('verify-id-input').value.trim();
+            if (userId) {
+                await fetchVerificationResult(userId);
+            }
+        }
+        
+        function processVerificationText(decodedText) {
+            // Expected format from QR code: PCT-VERIFY:PCT-2025-XXXXXX|STATUS:Active
+            const parts = decodedText.split('|');
+            const userIdPart = parts.find(p => p.startsWith('PCT-VERIFY:'));
+            
+            if (userIdPart) {
+                const userId = userIdPart.split(':')[1];
+                document.getElementById('verify-id-input').value = userId;
+                fetchVerificationResult(userId);
+            } else {
+                showMessage("Invalid QR Code format. Please scan an official PCT-MC.", 'error');
+            }
+        }
+        
+        async function fetchVerificationResult(userId) {
+            const resultContainer = document.getElementById('verification-result');
+            const titleElement = document.getElementById('result-title');
+            const nameElement = document.getElementById('result-name');
+            const statusElement = document.getElementById('result-status');
+            const expiryElement = document.getElementById('result-expiry');
+
+            resultContainer.classList.add('hidden');
+            resultContainer.classList.remove('bg-green-100', 'bg-red-100');
+            titleElement.textContent = "Verifying...";
+            
+            try {
+                // NOTE: This endpoint should be a public, read-only endpoint on the API
+                const response = await fetch(`${API_BASE_URL}/verify/${userId}`);
+                const data = await response.json();
+
+                resultContainer.classList.remove('hidden');
+
+                if (response.ok) {
+                    const status = data.Status.toUpperCase();
+                    const result = data.Verification_Result.toUpperCase();
+                    
+                    if (result === 'AUTHENTICATED') {
+                        resultContainer.classList.add('bg-green-100');
+                        titleElement.textContent = '✅ VERIFIED & ACTIVE';
+                        titleElement.className = 'font-bold text-lg mb-2 text-green-700';
+                    } else {
+                        resultContainer.classList.add('bg-red-100');
+                        titleElement.textContent = `❌ ${result}`;
+                        titleElement.className = 'font-bold text-lg mb-2 text-red-700';
+                    }
+                    
+                    nameElement.textContent = `Member: ${data.Name}`;
+                    statusElement.textContent = `DB Status: ${status}`;
+                    statusElement.className = status.includes('ACTIVE') ? 'font-semibold text-green-600' : 'font-semibold text-red-600';
+                    expiryElement.textContent = `Valid Until: ${data.Valid_Until}`;
+                    
+                } else {
+                    // ID NOT FOUND case
+                    resultContainer.classList.add('bg-red-100');
+                    titleElement.textContent = '❌ ID NOT FOUND';
+                    nameElement.textContent = `User ID: ${userId}`;
+                    statusElement.textContent = data.error || 'The system could not locate this ID.';
+                    statusElement.className = 'font-semibold text-red-600';
+                    expiryElement.textContent = '';
+                }
+            } catch (error) {
+                console.error("Verification API Error:", error);
+                showMessage("Verification failed. Network error.", 'error');
+            }
+        }
+        
+        async function fetchDashboardStats() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/`, {
+                    method: 'GET',
+                    headers: createAuthHeaders()
+                });
+                const data = await response.json();
+                
+                // Assuming the base route returns necessary stats or we calculate them here.
+                // For simplicity, we just check if it's online for now. The search will provide the real data.
+                if (response.ok) {
+                    document.getElementById('stat-total').textContent = 'N/A';
+                    document.getElementById('stat-active').textContent = data.active_members_in_db || 0;
+                    document.getElementById('stat-inactive').textContent = 'N/A';
+                }
+            } catch (error) {
+                console.error("Dashboard API Error:", error);
+                document.getElementById('stat-total').textContent = 'Error';
+            }
+            // Trigger a general search on load to populate the table
+            handleMemberSearch({ preventDefault: () => {} });
+        }
+
+
+        // --- INITIALIZATION ---
+        window.onload = () => {
+            // Start the app on the login screen
+            navigate('login');
+        };
+    </script>
+</body>
+</html>
