@@ -11,7 +11,7 @@ from reportlab.graphics.shapes import Drawing
 from reportlab.graphics import renderPDF
 from flask import Flask, jsonify, request, send_file
 from werkzeug.utils import secure_filename
-from flask_cors import CORS # <--- FIX: Import CORS
+from flask_cors import CORS 
 from functools import wraps
 from sqlalchemy import func
 from sqlalchemy import or_ 
@@ -21,7 +21,7 @@ from db import Session, CampaignMember, AdminUser
 
 # --- 1. APPLICATION SETUP & CONFIGURATION ---
 app = Flask(__name__)
-CORS(app) # <--- FIX: Initialize CORS to allow cross-origin requests
+CORS(app) # Initialize CORS to allow cross-origin requests
 
 # Configuration for secure file handling
 UPLOAD_DIR = "/tmp/photos"
@@ -92,7 +92,8 @@ def admin_login():
             "role": user.role,
             "token_for_testing": user.username # For testing admin routes
         }), 200
-    return jsonify({"error": "Invalid credentials."}, 401)
+    # FIX: Ensure all failure cases return JSON, not the default HTML error page
+    return jsonify({"error": "Invalid credentials. Authentication Failed."}), 401
 
 # --- FEATURE MM-100 & MM-101: SECURE MEMBER REGISTRATION ---
 @app.route('/members/register', methods=['POST'])
@@ -271,9 +272,14 @@ def generate_member_card(user_id):
 
     # 2. Draw Official Photo ID (ID Face)
     photo_path = os.path.join(UPLOAD_DIR, member.photo_filename)
-    try:
-        p.drawImage(photo_path, X_START + 10, Y_START + 105, PHOTO_SIZE, PHOTO_SIZE, preserveAspectRatio=True)
-    except Exception:
+    # FIX: Robust check for file existence before attempting to draw (prevents 500 HTML error)
+    if os.path.exists(photo_path):
+        try:
+            p.drawImage(photo_path, X_START + 10, Y_START + 105, PHOTO_SIZE, PHOTO_SIZE, preserveAspectRatio=True)
+        except Exception:
+            p.drawString(X_START + 10, Y_START + 145, "[Error Loading Photo]")
+            
+    else:
         # Fallback if image file is missing (SEC-402)
         p.drawString(X_START + 10, Y_START + 145, "[Photo Placeholder]")
 
