@@ -334,8 +334,8 @@ def generate_member_card(user_id):
         p.rect(X_OFFSET + 2, Y_OFFSET + 2, CARD_WIDTH - 4, CARD_HEIGHT - 4, stroke=0, fill=1)
 
         # --- 2. Campaign Logo (Top Right - UPND.jpg) ---
+        # FIX 1: Explicitly use the correct logo filename 'UPND.jpg'
         try:
-            # FIX: Use the specific uploaded file name 'UPND.jpg'
             script_dir = os.path.dirname(__file__)
             logo_path = os.path.join(script_dir, 'UPND.jpg') 
             if os.path.exists(logo_path):
@@ -355,7 +355,7 @@ def generate_member_card(user_id):
 
         # --- 3. Header Text ---
         # Shift the header text left to avoid the logo
-        HEADER_X = X_OFFSET + PHOTO_BOX_SIZE + 20 
+        HEADER_X = X_OFFSET + 120 
         
         p.setFont("Helvetica-Bold", 16)
         p.setFillColor(COLOR_TEXT_LIGHT)
@@ -371,32 +371,41 @@ def generate_member_card(user_id):
 
         # Draw Official Photo ID (ID Face)
         photo_path = os.path.join(UPLOAD_DIR, member.photo_filename)
-        if os.path.exists(photo_path):
-            try:
+        
+        # FIX 2: Handle the Photo Error Placeholder more gracefully
+        try:
+            if os.path.exists(photo_path):
+                # Try loading the image only if the file exists locally
+                img = ImageReader(photo_path)
+                
                 # Use a circular clip path for the photo
                 p.saveState()
-                p.setFillColor(colors.white) # Ensure no fill from circle affects clipping
+                p.setFillColor(colors.white) 
                 p.setStrokeColor(colors.white)
                 p.circle(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2, PHOTO_BOX_SIZE/2, stroke=0, fill=1)
                 p.clipPage()
-                p.drawImage(photo_path, PHOTO_X, PHOTO_Y, PHOTO_BOX_SIZE, PHOTO_BOX_SIZE, preserveAspectRatio=True, mask='auto')
+                p.drawImage(img, PHOTO_X, PHOTO_Y, PHOTO_BOX_SIZE, PHOTO_BOX_SIZE, preserveAspectRatio=True, mask='auto')
                 p.restoreState() # Restore context after clipping
-            except Exception:
+            else:
+                # File not found (e.g., server restart or temporary file deleted)
                 p.setFillColor(COLOR_TEXT_DARK)
-                p.setFont("Helvetica", 8)
-                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "Photo Error")
-                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 15, "Placeholder")
-        else:
+                p.setFont("Helvetica-Bold", 10)
+                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 + 5, "Photo File")
+                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "Missing (SEC-402)")
+
+        except Exception as e:
+            # If ReportLab fails to draw the image for other reasons (e.g., corrupt file)
+            print(f"Photo drawing error: {e}")
             p.setFillColor(COLOR_TEXT_DARK)
-            p.setFont("Helvetica-Bold", 10)
-            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 + 5, "OFFICIAL")
-            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "PHOTO ID")
+            p.setFont("Helvetica", 8)
+            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "Photo Error")
+            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 15, "Placeholder")
 
 
         # --- 5. Member Details ---
-        DETAIL_TEXT_X = X_OFFSET + 120 # Start details further left, away from photo
-        DETAIL_Y_START = Y_OFFSET + CARD_HEIGHT - 75 # Starting Y position for details
-        LINE_SPACING = 15 # Standard spacing for details
+        DETAIL_TEXT_X = X_OFFSET + PHOTO_BOX_SIZE + 15 # Start details block at 15pt right of photo border
+        DETAIL_Y_START = Y_OFFSET + CARD_HEIGHT - 70 # Starting Y position for details
+        LINE_SPACING = 12 # Tightened spacing for better fit
 
         p.setFillColor(COLOR_TEXT_LIGHT)
         p.setFont("Helvetica-Bold", 11)
@@ -406,15 +415,14 @@ def generate_member_card(user_id):
         
         # Geographic Data (GM-201)
         p.setFont("Helvetica", 9)
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (3.5 * LINE_SPACING), f"Province: {member.province}")
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (4.5 * LINE_SPACING), f"Town: {member.town}")
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (5.5 * LINE_SPACING), f"Zone: {member.zone}")
+        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (3.5 * LINE_SPACING) - 5, f"Province: {member.province}") 
+        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (4.5 * LINE_SPACING) - 5, f"Town: {member.town}")
+        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (5.5 * LINE_SPACING) - 5, f"Zone: {member.zone}")
 
         # --- 6. Membership Period (IDG-303) - Stylized Band ---
         BAND_HEIGHT = 25
-        BAND_Y = Y_OFFSET + CARD_HEIGHT - 175
+        BAND_Y = Y_OFFSET + 65 
         p.setFillColor(COLOR_ACCENT_YELLOW)
-        # Extend the yellow band across the remaining width of the card
         p.rect(X_OFFSET + 2, BAND_Y, CARD_WIDTH - 4, BAND_HEIGHT, stroke=0, fill=1) 
 
         p.setFont("Helvetica-BoldOblique", 12)
