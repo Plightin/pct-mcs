@@ -286,7 +286,7 @@ def region_report(admin_user):
 # --- FEATURE IDG-300: DIGITAL ID CARD GENERATION ---
 @app.route('/members/<string:user_id>/card', methods=['GET'])
 def generate_member_card(user_id):
-    """Generates the secure PDF Membership Card (PCT-MC) with enhanced design."""
+    """Generates the secure PDF Membership Card (PCT-MC) with enhanced design, matching the Silver PDF look."""
     session = Session()
     try:
         member = session.query(CampaignMember).filter_by(user_id=user_id).first()
@@ -302,150 +302,163 @@ def generate_member_card(user_id):
         p = canvas.Canvas(buffer, pagesize=letter)
         width, height = letter
         
-        # --- Card Design Parameters (Enhanced IDG-301) ---
-        CARD_WIDTH = 350
-        CARD_HEIGHT = 220
-        X_OFFSET = 50 # Starting X position for the card
-        Y_OFFSET = height - CARD_HEIGHT - 50 # Starting Y position for the card (top-down)
-
-        PHOTO_BOX_SIZE = 90
-        PHOTO_X = X_OFFSET + 15
-        PHOTO_Y = Y_OFFSET + CARD_HEIGHT - PHOTO_BOX_SIZE - 20 # Position from card top
+        # --- Card Design Parameters (Enhanced IDG-301 - MATCHING SILVER PDF) ---
+        CARD_WIDTH = 380  # Increased width slightly for a wider card
+        CARD_HEIGHT = 240 # Increased height
+        X_OFFSET = 50 
+        Y_OFFSET = height - CARD_HEIGHT - 50 
         
-        QR_CODE_SIZE = 60
-        QR_X = X_OFFSET + 15
-        QR_Y = Y_OFFSET + 15 # Position from card bottom
-
         # --- Define Colors ---
-        COLOR_PRIMARY_RED = colors.Color(0.85, 0.27, 0.2) # A strong red
-        COLOR_DARK_BLUE = colors.Color(0.1, 0.1, 0.4)
-        COLOR_ACCENT_YELLOW = colors.Color(0.95, 0.75, 0.0)
+        COLOR_BG_WHITE = colors.white
+        COLOR_PRIMARY_RED = colors.Color(0.85, 0.27, 0.2) 
+        COLOR_DARK_BLUE = colors.Color(0.05, 0.2, 0.4) # Dark blue for text/accents
+        COLOR_ACCENT_YELLOW = colors.Color(0.95, 0.75, 0.0) # Yellow for the logo background
         COLOR_TEXT_LIGHT = colors.white
-        COLOR_TEXT_DARK = colors.black
-
+        
         # --- 1. Draw Card Background and Border ---
-        p.setFillColor(colors.white)
+        p.setFillColor(COLOR_BG_WHITE)
         p.setStrokeColor(COLOR_DARK_BLUE)
-        p.setLineWidth(1.5)
-        p.roundRect(X_OFFSET, Y_OFFSET, CARD_WIDTH, CARD_HEIGHT, 10, stroke=1, fill=1)
+        p.setLineWidth(2)
+        p.roundRect(X_OFFSET, Y_OFFSET, CARD_WIDTH, CARD_HEIGHT, 15, stroke=1, fill=1) # Rounded corners
 
-        # Draw Inner Red Background
+        # Draw Inner Red Background (Main Card Body)
         p.setFillColor(COLOR_PRIMARY_RED)
-        p.rect(X_OFFSET + 2, Y_OFFSET + 2, CARD_WIDTH - 4, CARD_HEIGHT - 4, stroke=0, fill=1)
-
-        # --- 2. Campaign Logo (Top Right - UPND.jpg) ---
-        # FIX 1: Explicitly use the correct logo filename 'UPND.jpg'
+        p.rect(X_OFFSET + 3, Y_OFFSET + 3, CARD_WIDTH - 6, CARD_HEIGHT - 6, stroke=0, fill=1)
+        
+        # --- Background Element (Simulate the ZAMBIA coat of arms graphic) ---
+        # Draw a black band across the center, matching the PDF reference visually
+        p.setFillColor(colors.black)
+        p.rect(X_OFFSET + 3, Y_OFFSET + 3, CARD_WIDTH - 6, 80, stroke=0, fill=1)
+        
+        # --- 2. Logo and Header Block ---
+        LOGO_X = X_OFFSET + 10
+        LOGO_Y = Y_OFFSET + CARD_HEIGHT - 65 
+        
+        HEADER_X = X_OFFSET + 90
+        HEADER_Y_START = Y_OFFSET + CARD_HEIGHT - 35
+        
+        # Logo Integration (UPND.jpg)
         try:
             script_dir = os.path.dirname(__file__)
             logo_path = os.path.join(script_dir, 'UPND.jpg') 
             if os.path.exists(logo_path):
                 logo = ImageReader(logo_path)
-                # Position the logo in the top right corner area, size reduced slightly
-                p.drawImage(logo, X_OFFSET + CARD_WIDTH - 85, Y_OFFSET + CARD_HEIGHT - 60, 70, 50, preserveAspectRatio=True, mask='auto')
-            else:
-                p.setFillColor(COLOR_TEXT_LIGHT)
-                p.setFont("Helvetica-Bold", 10)
-                p.drawString(X_OFFSET + CARD_WIDTH - 75, Y_OFFSET + CARD_HEIGHT - 35, "PCT Logo Missing")
+                p.drawImage(logo, LOGO_X, LOGO_Y, 70, 70, preserveAspectRatio=True, mask='auto')
+            
+            p.setFillColor(COLOR_TEXT_LIGHT)
+            p.setFont("Helvetica-Bold", 12)
+            p.drawString(LOGO_X + 2, Y_OFFSET + 15, "ONE ZAMBIA") # Left bottom slogan
+            p.drawString(X_OFFSET + CARD_WIDTH - 80, Y_OFFSET + 15, "ONE NATION") # Right bottom slogan
+            
         except Exception as e:
-            print(f"Error loading logo: {e}")
+            # Fallback for missing/error logo
             p.setFillColor(COLOR_TEXT_LIGHT)
             p.setFont("Helvetica-Bold", 10)
-            p.drawString(X_OFFSET + CARD_WIDTH - 75, Y_OFFSET + CARD_HEIGHT - 35, "PCT Logo Error")
+            p.drawString(LOGO_X, Y_OFFSET + CARD_HEIGHT - 35, "Logo Missing")
 
-
-        # --- 3. Header Text ---
-        # Shift the header text left to avoid the logo
-        HEADER_X = X_OFFSET + 120 
-        
-        p.setFont("Helvetica-Bold", 16)
+        # Header Text (Shifted to the right of the logo space)
         p.setFillColor(COLOR_TEXT_LIGHT)
-        p.drawString(HEADER_X, Y_OFFSET + CARD_HEIGHT - 30, "PRESIDENTIAL CAMPAIGN TEAM")
+        p.setFont("Helvetica-Bold", 14)
+        p.drawString(HEADER_X, HEADER_Y_START, "PRESIDENTIAL CAMPAIGN TEAM")
         p.setFont("Helvetica", 10)
-        p.drawString(HEADER_X, Y_OFFSET + CARD_HEIGHT - 45, "OFFICIAL MEMBERSHIP CARD (PCT-MC)")
+        p.drawString(HEADER_X, HEADER_Y_START - 15, "OFFICE OF THE SECRETARY GENERAL")
+        p.drawString(HEADER_X, HEADER_Y_START - 30, "MEMBERSHIP CARD")
+        
+        # --- 3. Member Details (Two Columns) ---
+        
+        # Define Columns for Labels and Values
+        LABEL_X = X_OFFSET + 90
+        VALUE_X = X_OFFSET + 165 # Position for the value field
+        DETAIL_Y_START = Y_OFFSET + CARD_HEIGHT - 100
+        LINE_SPACING = 18 # Increased spacing to match the PDF
 
-        # --- 4. Photo Placeholder (Circular Frame) ---
+        # Set up a generic field value. We will re-use this for all lines.
+        def draw_detail(canvas, y, label, value):
+            canvas.setFillColor(COLOR_TEXT_LIGHT)
+            canvas.setFont("Helvetica", 10)
+            canvas.drawString(LABEL_X, y, label)
+            
+            canvas.setFillColor(COLOR_TEXT_LIGHT)
+            canvas.setFont("Helvetica-Bold", 10)
+            canvas.drawString(VALUE_X, y, f": {value}")
+
+        # 3.1 Personal Details
+        draw_detail(p, DETAIL_Y_START, "NAME", member.name.upper())
+        draw_detail(p, DETAIL_Y_START - LINE_SPACING, "NRC", member.nrc)
+        
+        # 3.2 Location/Role Details
+        # NOTE: We use POSITION for Zone/Town, and LOCATION for Province/HQ text
+        draw_detail(p, DETAIL_Y_START - (2 * LINE_SPACING), "POSITION", f"Campaign Team Member")
+        draw_detail(p, DETAIL_Y_START - (3 * LINE_SPACING), "LOCATION", f"{member.town.upper()}, {member.province.upper()}")
+        
+        # 3.3 Issue Details
+        draw_detail(p, DETAIL_Y_START - (4.5 * LINE_SPACING), "DATE OF ISSUE", member.membership_start.strftime('%Y-%m-%d'))
+        draw_detail(p, DETAIL_Y_START - (5.5 * LINE_SPACING), "ISSUED BY", "DR. Monze Muleya (Sample)") 
+        
+        # Signature/Chairman Slot
+        p.setFillColor(COLOR_DARK_BLUE)
+        p.setFont("Helvetica-Bold", 10)
+        p.drawString(X_OFFSET + 250, DETAIL_Y_START - (5.5 * LINE_SPACING), "National Chairperson.")
+        p.setFont("Helvetica", 8)
+        p.drawString(X_OFFSET + 250, DETAIL_Y_START - (6 * LINE_SPACING), "HAKAINDE HICHILEMA (Sample)")
+        
+        # --- 4. Photo Placeholder (Left Column) ---
+        PHOTO_SIZE = 80
+        PHOTO_X = X_OFFSET + 5
+        PHOTO_Y = Y_OFFSET + CARD_HEIGHT - 110 - PHOTO_SIZE # Adjusted Y to be below Logo/Header area
+
         p.setFillColor(colors.white)
-        p.setStrokeColor(COLOR_ACCENT_YELLOW) # Frame color
-        p.setLineWidth(2)
-        p.circle(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2, PHOTO_BOX_SIZE/2, stroke=1, fill=1) # Draw white circle with yellow border
+        p.setStrokeColor(COLOR_DARK_BLUE)
+        p.setLineWidth(1)
+        p.rect(PHOTO_X, PHOTO_Y, PHOTO_SIZE, PHOTO_SIZE, stroke=1, fill=1) # Simple square frame
 
         # Draw Official Photo ID (ID Face)
         photo_path = os.path.join(UPLOAD_DIR, member.photo_filename)
-        
-        # FIX 2: Handle the Photo Error Placeholder more gracefully
         try:
             if os.path.exists(photo_path):
-                # Try loading the image only if the file exists locally
                 img = ImageReader(photo_path)
-                
-                # Use a circular clip path for the photo
-                p.saveState()
-                p.setFillColor(colors.white) 
-                p.setStrokeColor(colors.white)
-                p.circle(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2, PHOTO_BOX_SIZE/2, stroke=0, fill=1)
-                p.clipPage()
-                p.drawImage(img, PHOTO_X, PHOTO_Y, PHOTO_BOX_SIZE, PHOTO_BOX_SIZE, preserveAspectRatio=True, mask='auto')
-                p.restoreState() # Restore context after clipping
+                p.drawImage(img, PHOTO_X + 2, PHOTO_Y + 2, PHOTO_SIZE - 4, PHOTO_SIZE - 4, preserveAspectRatio=True, mask='auto')
             else:
-                # File not found (e.g., server restart or temporary file deleted)
-                p.setFillColor(COLOR_TEXT_DARK)
-                p.setFont("Helvetica-Bold", 10)
-                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 + 5, "Photo File")
-                p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "Missing (SEC-402)")
-
-        except Exception as e:
-            # If ReportLab fails to draw the image for other reasons (e.g., corrupt file)
-            print(f"Photo drawing error: {e}")
-            p.setFillColor(COLOR_TEXT_DARK)
-            p.setFont("Helvetica", 8)
-            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 5, "Photo Error")
-            p.drawCentredString(PHOTO_X + PHOTO_BOX_SIZE/2, PHOTO_Y + PHOTO_BOX_SIZE/2 - 15, "Placeholder")
-
-
-        # --- 5. Member Details ---
-        DETAIL_TEXT_X = X_OFFSET + PHOTO_BOX_SIZE + 15 # Start details block at 15pt right of photo border
-        DETAIL_Y_START = Y_OFFSET + CARD_HEIGHT - 70 # Starting Y position for details
-        LINE_SPACING = 12 # Tightened spacing for better fit
-
-        p.setFillColor(COLOR_TEXT_LIGHT)
-        p.setFont("Helvetica-Bold", 11)
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START, f"NAME: {member.name.upper()}")
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - LINE_SPACING, f"NRC: {member.nrc}")
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (2 * LINE_SPACING), f"ID: {member.user_id}")
+                p.setFillColor(COLOR_DARK_BLUE)
+                p.setFont("Helvetica-Bold", 8)
+                p.drawCentredString(PHOTO_X + PHOTO_SIZE/2, PHOTO_Y + PHOTO_SIZE/2 + 5, "OFFICIAL PHOTO ID")
+                p.drawCentredString(PHOTO_X + PHOTO_SIZE/2, PHOTO_Y + PHOTO_SIZE/2 - 5, "Missing (SEC-402)")
+        except Exception:
+            p.setFillColor(COLOR_DARK_BLUE)
+            p.setFont("Helvetica-Bold", 8)
+            p.drawCentredString(PHOTO_X + PHOTO_SIZE/2, PHOTO_Y + PHOTO_SIZE/2 + 5, "PHOTO ERROR")
+            p.drawCentredString(PHOTO_X + PHOTO_SIZE/2, PHOTO_Y + PHOTO_SIZE/2 - 5, "Placeholder")
         
-        # Geographic Data (GM-201)
-        p.setFont("Helvetica", 9)
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (3.5 * LINE_SPACING) - 5, f"Province: {member.province}") 
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (4.5 * LINE_SPACING) - 5, f"Town: {member.town}")
-        p.drawString(DETAIL_TEXT_X, DETAIL_Y_START - (5.5 * LINE_SPACING) - 5, f"Zone: {member.zone}")
-
-        # --- 6. Membership Period (IDG-303) - Stylized Band ---
-        BAND_HEIGHT = 25
-        BAND_Y = Y_OFFSET + 65 
-        p.setFillColor(COLOR_ACCENT_YELLOW)
-        p.rect(X_OFFSET + 2, BAND_Y, CARD_WIDTH - 4, BAND_HEIGHT, stroke=0, fill=1) 
-
-        p.setFont("Helvetica-BoldOblique", 12)
-        p.setFillColor(COLOR_DARK_BLUE)
-        p.drawCentredString(X_OFFSET + CARD_WIDTH / 2, BAND_Y + 8, 
-                           f"VALID UNTIL: {member.membership_end.strftime('%Y-%m-%d')}")
+        # --- 5. QR Code (Verification/SN) ---
+        QR_CODE_SIZE = 50
+        QR_X = X_OFFSET + 10
+        QR_Y = Y_OFFSET + 40 
         
-        # --- 7. QR Code (IDG-302) ---
         qr_data = f"PCT-VERIFY:{member.user_id}|STATUS:{member.status}|EXPIRY:{member.membership_end.strftime('%Y-%m-%d')}" 
         qrw = qr.QrCodeWidget(qr_data)
         
-        # Adjust QR code bounds for rendering
         bounds = qrw.getBounds()
         x1, y1, x2, y2 = bounds
         qr_drawing = Drawing(QR_CODE_SIZE, QR_CODE_SIZE, transform=[QR_CODE_SIZE/(x2-x1),0,0,QR_CODE_SIZE/(y2-y1),-x1*QR_CODE_SIZE/(x2-x1),-y1*QR_CODE_SIZE/(y2-y1)])
         qr_drawing.add(qrw)
         renderPDF.draw(qr_drawing, p, QR_X, QR_Y) # Position bottom-left
-        
-        # Verification Text below QR
+
+        p.setFillColor(COLOR_DARK_BLUE)
         p.setFont("Helvetica", 8)
-        p.setFillColor(COLOR_TEXT_LIGHT)
-        p.drawString(QR_X + QR_CODE_SIZE + 5, QR_Y + 25, "Scan to verify status (SEC-401)")
-        p.drawString(QR_X + QR_CODE_SIZE + 5, QR_Y + 15, "ID: " + member.user_id) # Repeat ID for quick lookup
+        p.drawString(QR_X + QR_CODE_SIZE + 5, QR_Y + QR_CODE_SIZE - 10, "SN: (Scan for Verification)")
+        p.drawString(QR_X + QR_CODE_SIZE + 5, QR_Y + QR_CODE_SIZE - 20, "ID: " + member.user_id) 
+        
+        # --- 6. Membership Period (Bottom Bar) ---
+        BAND_HEIGHT = 20
+        BAND_Y = Y_OFFSET + 3 
+        p.setFillColor(COLOR_DARK_BLUE) # Use a prominent campaign color for the bar
+        p.rect(X_OFFSET + 3, BAND_Y, CARD_WIDTH - 6, BAND_HEIGHT, stroke=0, fill=1) 
+
+        p.setFont("Helvetica-BoldOblique", 11)
+        p.setFillColor(COLOR_ACCENT_YELLOW)
+        p.drawCentredString(X_OFFSET + CARD_WIDTH / 2, BAND_Y + 7, 
+                           f"VALID UNTIL: {member.membership_end.strftime('%Y-%m-%d')}")
+
 
         # Finalize and Return PDF
         p.showPage()
